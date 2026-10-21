@@ -1,0 +1,83 @@
+name: PAL pack-only packages
+run-name: PAL packages a5f20fb8 / ${{ github.run_id }}.${{ github.run_attempt }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    if: github.repository == 'fanxiao92/gdUnit4Net'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      DOTNET_INSTALL_DIR: ${{ runner.temp }}/pal-dotnet
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+      DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: 'true'
+      PYTHONDONTWRITEBYTECODE: '1'
+      PAL_WORKFLOW_REF: ${{ github.workflow_ref }}
+      PAL_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      PAL_API_VERSION: 5.1.0-rc6.pal.a5f20fb8.1
+      PAL_ADAPTER_VERSION: 3.2.0-pal.a5f20fb8.1
+    steps:
+      - name: Checkout packaging recipe
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: fanxiao92/gdUnit4Net
+          ref: ${{ github.workflow_sha }}
+          path: recipe
+          persist-credentials: false
+
+      - name: Checkout immutable upstream source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: godot-gdunit-labs/gdUnit4Net
+          ref: a5f20fb8c12864b17c77d433cad14f9bf0094458
+          path: source
+          persist-credentials: false
+
+      - name: Set up exact build SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '10.0.402'
+          cache: false
+
+      - name: Validate inputs and pack API plus adapter
+        working-directory: source
+        run: |
+          set -euo pipefail
+          python3 ../recipe/scripts/pal-packages.py inputs --source . --recipe ../recipe
+          mkdir "$GITHUB_WORKSPACE/packages"
+          properties=(
+            "-p:GdUnitAPIVersion=$PAL_API_VERSION"
+            "-p:GdUnitTestAdapterVersion=$PAL_ADAPTER_VERSION"
+            "-p:PackageOutputPath=$GITHUB_WORKSPACE/packages"
+            "-p:GeneratePackageOnBuild=false"
+            "-p:ContinuousIntegrationBuild=true"
+          )
+          dotnet restore TestAdapter/GdUnit4TestAdapter.csproj "${properties[@]}"
+          dotnet build TestAdapter/GdUnit4TestAdapter.csproj -c Release --no-restore "${properties[@]}"
+          dotnet pack Api/GdUnit4Api.csproj -c Release --no-build --no-restore "${properties[@]}"
+          dotnet pack TestAdapter/GdUnit4TestAdapter.csproj -c Release --no-build --no-restore "${properties[@]}"
+          python3 ../recipe/scripts/pal-packages.py manifest --source . --recipe ../recipe --packages ../packages
+          python3 ../recipe/scripts/pal-packages.py verify --packages ../packages
+
+      - name: Upload validated packages and provenance only
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: pal-gdunit-a5f20fb8-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            packages/*.nupkg
+            packages/provenance.json
+            packages/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+          include-hidden-files: false
